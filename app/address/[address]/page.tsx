@@ -45,7 +45,7 @@ export default async function AddressPage({ params }: { params: Promise<{ addres
 
   return (
     <div className="space-y-8">
-      <WalletSummaryCard profile={displayProfile} primaryName={primaryName} />
+      <WalletSummaryCard profile={displayProfile} primaryName={primaryName} coverage={coverage} />
       <IndexedWindowNote coverage={coverage} />
       {!databaseEnabled ? (
         <Badge className="border-amber-300 bg-amber-50 text-amber-800">
