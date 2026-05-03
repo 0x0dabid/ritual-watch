@@ -127,9 +127,12 @@ Configure these in GitHub before relying on scheduled indexing:
 - Repository variable `RITUAL_RPC_URL`: `https://rpc.ritualfoundation.org`.
 - Repository variable `INDEXER_START_BLOCK`: the earliest block to backfill from.
 - Repository variable `INDEXER_COVERAGE_START_BLOCK`: the first block the UI should treat as the accurate indexed window. Usually the same as `INDEXER_START_BLOCK`.
-- Optional repository variable `INDEXER_MAX_BLOCKS`: blocks per scheduled run, default `50`.
+- Optional repository variable `INDEXER_MAX_BLOCKS`: blocks per scheduled run, default `250` for focused indexing.
+- Optional repository variable `INDEXER_BATCH_SIZE`: blocks per local batch, default `50`.
 
 You can also run it manually from GitHub Actions and override `max_blocks` for a larger catch-up run. Vercel hosts the explorer UI; GitHub Actions keeps Supabase filled with indexed chain data.
+
+The scheduled indexer is focused on product data: wallet transactions, sender/receiver activity, daily active wallets, ERC-20 transfers, ERC-721 transfers, and ERC-1155 sightings. It does not store raw logs or fetch token metadata by default because those slow down free-tier indexing.
 
 ## .ritual Support
 
