@@ -1,11 +1,20 @@
 import { defineChain } from "viem";
+import { isAddress } from "viem";
+
+const DEFAULT_RPC_URL = "https://rpc.ritualfoundation.org";
+const DEFAULT_EXPLORER_URL = "https://explorer.ritualfoundation.org";
+const DEFAULT_NAMES_CONTRACT = "0xb9976C592f4E90B51bDa05B0B3d8b7735D24743A" as const;
+
+const configuredNamesContract = process.env.NEXT_PUBLIC_RITUAL_NAMES_CONTRACT?.trim();
+const configuredRpcUrl = process.env.RITUAL_RPC_URL?.trim() || process.env.NEXT_PUBLIC_RITUAL_RPC_URL?.trim();
+const configuredExplorerUrl = process.env.NEXT_PUBLIC_RITUAL_EXPLORER_URL?.trim();
 
 export const ritualConfig = {
   chainName: "Ritual Testnet",
   chainId: Number(process.env.NEXT_PUBLIC_RITUAL_CHAIN_ID ?? 1979),
-  rpcUrl: process.env.RITUAL_RPC_URL ?? process.env.NEXT_PUBLIC_RITUAL_RPC_URL ?? "https://rpc.ritualfoundation.org",
-  explorerUrl: process.env.NEXT_PUBLIC_RITUAL_EXPLORER_URL ?? "https://explorer.ritualfoundation.org",
-  namesContract: (process.env.NEXT_PUBLIC_RITUAL_NAMES_CONTRACT ?? "0xb9976C592f4E90B51bDa05B0B3d8b7735D24743A") as `0x${string}`
+  rpcUrl: configuredRpcUrl || DEFAULT_RPC_URL,
+  explorerUrl: configuredExplorerUrl || DEFAULT_EXPLORER_URL,
+  namesContract: (configuredNamesContract && isAddress(configuredNamesContract) ? configuredNamesContract : DEFAULT_NAMES_CONTRACT) as `0x${string}`
 } as const;
 
 export const ritualChain = defineChain({
