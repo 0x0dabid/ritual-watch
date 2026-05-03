@@ -1,0 +1,52 @@
+name: Ritual Watch Indexer
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      max_blocks:
+        description: "Maximum blocks to index in this run"
+        required: false
+        default: "50"
+
+concurrency:
+  group: ritual-watch-indexer
+  cancel-in-progress: false
+
+jobs:
+  indexer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}?connection_limit=1&pool_timeout=20
+      RITUAL_RPC_URL: ${{ vars.RITUAL_RPC_URL || 'https://rpc.ritualfoundation.org' }}
+      NEXT_PUBLIC_RITUAL_CHAIN_ID: "1979"
+      NEXT_PUBLIC_RITUAL_RPC_URL: ${{ vars.RITUAL_RPC_URL || 'https://rpc.ritualfoundation.org' }}
+      NEXT_PUBLIC_RITUAL_EXPLORER_URL: "https://explorer.ritualfoundation.org"
+      NEXT_PUBLIC_RITUAL_NAMES_CONTRACT: "0xb9976C592f4E90B51bDa05B0B3d8b7735D24743A"
+      INDEXER_START_BLOCK: ${{ vars.INDEXER_START_BLOCK || '1000000' }}
+      INDEXER_ONCE: "true"
+      INDEXER_MAX_BLOCKS: ${{ inputs.max_blocks || vars.INDEXER_MAX_BLOCKS || '50' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Apply database migrations
+        run: npm run db:deploy
+
+      - name: Index Ritual blocks
+        run: npm run indexer

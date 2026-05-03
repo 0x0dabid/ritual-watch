@@ -8,7 +8,7 @@ import { ERC1155_TRANSFER_BATCH_TOPIC, ERC1155_TRANSFER_SINGLE_TOPIC, TRANSFER_T
 requireEnv("DATABASE_URL");
 const client = createPublicClient({ chain: ritualChain, transport: http(ritualConfig.rpcUrl) });
 const ZERO = "0x0000000000000000000000000000000000000000";
-const BATCH_SIZE = 10n;
+const BATCH_SIZE = BigInt(process.env.INDEXER_BATCH_SIZE || "10");
 const DEFAULT_START_BLOCK = 1_000_000n;
 
 const erc20Abi = parseAbi([
@@ -20,6 +20,10 @@ const erc20Abi = parseAbi([
 async function main() {
   const configuredStartBlock = BigInt(process.env.INDEXER_START_BLOCK || "0");
   const startBlock = configuredStartBlock === 0n ? DEFAULT_START_BLOCK : configuredStartBlock;
+  const once = process.env.INDEXER_ONCE === "true";
+  const maxBlocks = BigInt(process.env.INDEXER_MAX_BLOCKS || (once ? "50" : "0"));
+  let indexedBlocks = 0n;
+
   if (configuredStartBlock === 0n) {
     console.log(`INDEXER_START_BLOCK=0 detected; starting at ${DEFAULT_START_BLOCK.toString()} to avoid malformed genesis-era timestamps.`);
   }
@@ -31,20 +35,32 @@ async function main() {
 
   console.log("Ritual Watch indexer started");
   for (;;) {
+    if (maxBlocks > 0n && indexedBlocks >= maxBlocks) {
+      console.log(`Indexed ${indexedBlocks.toString()} block(s); exiting bounded indexer run.`);
+      return;
+    }
+
     const state = await prisma.indexedState.findUniqueOrThrow({ where: { id: "ritual-testnet" } });
     const latest = await client.getBlockNumber();
     let next = state.lastBlock + 1n;
     if (next < startBlock) next = startBlock;
 
     if (next > latest) {
+      if (once) {
+        console.log(`Indexer is caught up at block ${state.lastBlock.toString()}; latest is ${latest.toString()}.`);
+        return;
+      }
       await sleep(4_000);
       continue;
     }
 
-    const end = latest - next + 1n > BATCH_SIZE ? next + BATCH_SIZE - 1n : latest;
+    const remaining = maxBlocks > 0n ? maxBlocks - indexedBlocks : BATCH_SIZE;
+    const batchSize = remaining < BATCH_SIZE ? remaining : BATCH_SIZE;
+    const end = latest - next + 1n > batchSize ? next + batchSize - 1n : latest;
     for (let n = next; n <= end; n++) {
       await indexBlock(n);
       await prisma.indexedState.update({ where: { id: "ritual-testnet" }, data: { lastBlock: n } });
+      indexedBlocks++;
       console.log(`indexed block ${n.toString()}`);
     }
   }
@@ -222,7 +238,11 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

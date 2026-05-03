@@ -114,6 +114,19 @@ It indexes:
 - ERC-1155 transfer contract sightings
 - Daily transaction and active wallet aggregates
 
+## GitHub Actions Indexer
+
+This repo includes `.github/workflows/indexer.yml`, a scheduled indexer that runs every 5 minutes and indexes a bounded chunk of blocks into Postgres.
+
+Configure these in GitHub before relying on scheduled indexing:
+
+- Repository secret `DATABASE_URL`: Supabase Postgres Session Pooler URL.
+- Repository variable `RITUAL_RPC_URL`: `https://rpc.ritualfoundation.org`.
+- Repository variable `INDEXER_START_BLOCK`: the earliest block to backfill from.
+- Optional repository variable `INDEXER_MAX_BLOCKS`: blocks per scheduled run, default `50`.
+
+You can also run it manually from GitHub Actions and override `max_blocks` for a larger catch-up run. Vercel hosts the explorer UI; GitHub Actions keeps Supabase filled with indexed chain data.
+
 ## .ritual Support
 
 `.ritual` support lives in `lib/ritual/ritualNames.ts`.
