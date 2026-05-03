@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getBlock } from "@/lib/data";
 import { formatAge, formatNumber } from "@/lib/utils";
 
+export const revalidate = 300;
+
 export default async function BlockPage({ params }: { params: Promise<{ number: string }> }) {
   const { number } = await params;
   if (!/^\d+$/.test(number)) notFound();

@@ -5,6 +5,8 @@ import { StatCard } from "@/components/stat-card";
 import { TransactionsTable } from "@/components/transactions-table";
 import { getAsyncActivity } from "@/lib/ritual/activity";
 
+export const revalidate = 60;
+
 export default async function AsyncPage() {
   const { transactions, stats } = await getAsyncActivity();
   return (

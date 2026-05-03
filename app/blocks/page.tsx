@@ -3,6 +3,8 @@ import { IndexedWindowNote } from "@/components/indexing-coverage-card";
 import { SectionHeader } from "@/components/section-header";
 import { getIndexingCoverage, getLatestBlocks } from "@/lib/data";
 
+export const revalidate = 30;
+
 export default async function BlocksPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   const params = await searchParams;
   const page = Number(params.page ?? 1);

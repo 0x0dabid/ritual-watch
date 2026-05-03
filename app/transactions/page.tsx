@@ -4,6 +4,8 @@ import { SectionHeader } from "@/components/section-header";
 import { TransactionsTable } from "@/components/transactions-table";
 import { getIndexingCoverage, getLatestTransactions } from "@/lib/data";
 
+export const revalidate = 30;
+
 export default async function TransactionsPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   const params = await searchParams;
   const page = Number(params.page ?? 1);

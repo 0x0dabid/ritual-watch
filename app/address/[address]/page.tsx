@@ -11,6 +11,8 @@ import { getIndexingCoverage, getNftHoldings, getTokenHoldings, getWalletProfile
 import { hasDatabase } from "@/lib/db/prisma";
 import { getNamesForAddress, getPrimaryName } from "@/lib/ritual/ritualNames";
 
+export const revalidate = 60;
+
 export default async function AddressPage({ params }: { params: Promise<{ address: string }> }) {
   const { address } = await params;
   if (!isAddress(address)) notFound();

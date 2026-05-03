@@ -5,6 +5,8 @@ import { StatCard } from "@/components/stat-card";
 import { TransactionsTable } from "@/components/transactions-table";
 import { getAgentActivity } from "@/lib/ritual/activity";
 
+export const revalidate = 60;
+
 export default async function AgentsPage() {
   const { transactions, stats } = await getAgentActivity();
   return (

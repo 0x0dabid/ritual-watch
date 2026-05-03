@@ -1,4 +1,3 @@
-import { unstable_noStore as noStore } from "next/cache";
 import { getAddress, isAddress } from "viem";
 import { prisma, hasDatabase } from "@/lib/db/prisma";
 import { publicClient } from "@/lib/ritual/client";
@@ -7,7 +6,6 @@ import type { DailyPoint, ExplorerBlock, ExplorerTransaction, IndexingCoverage, 
 import { normalizeAddress } from "@/lib/utils";
 
 export async function getDashboard() {
-  noStore();
   const [stats, latestTransactions, latestBlocks, daily, coverage] = await Promise.all([
     getNetworkStats(),
     getLatestTransactions(8),
@@ -19,7 +17,6 @@ export async function getDashboard() {
 }
 
 export async function getIndexingCoverage(): Promise<IndexingCoverage> {
-  noStore();
   const latestBlock = await publicClient.getBlockNumber();
 
   if (hasDatabase()) {
@@ -67,7 +64,6 @@ export async function getIndexingCoverage(): Promise<IndexingCoverage> {
 }
 
 export async function getNetworkStats() {
-  noStore();
   const latestBlockNumber = await publicClient.getBlockNumber();
 
   if (hasDatabase()) {
@@ -110,7 +106,6 @@ export async function getNetworkStats() {
 }
 
 export async function getLatestBlocks(limit = 20, page = 1): Promise<ExplorerBlock[]> {
-  noStore();
   if (hasDatabase()) {
     try {
       return await prisma.block.findMany({ where: { number: { gte: getCoverageStartBlock() } }, orderBy: { number: "desc" }, take: limit, skip: (page - 1) * limit });
@@ -139,7 +134,6 @@ export async function getLatestBlocks(limit = 20, page = 1): Promise<ExplorerBlo
 }
 
 export async function getLatestTransactions(limit = 20, page = 1): Promise<ExplorerTransaction[]> {
-  noStore();
   if (hasDatabase()) {
     try {
       return await prisma.transaction.findMany({
@@ -172,7 +166,6 @@ export async function getLatestTransactions(limit = 20, page = 1): Promise<Explo
 }
 
 export async function getDailyStats(): Promise<DailyPoint[]> {
-  noStore();
   if (hasDatabase()) {
     try {
       const coverageStartBlock = getCoverageStartBlock();
@@ -193,7 +186,6 @@ export async function getDailyStats(): Promise<DailyPoint[]> {
 }
 
 export async function getWalletProfile(address: string): Promise<WalletProfile> {
-  noStore();
   const checksummed = isAddress(address) ? getAddress(address) : address;
   const normalized = normalizeAddress(checksummed)!;
   const balance = isAddress(checksummed) ? await publicClient.getBalance({ address: checksummed as `0x${string}` }) : 0n;
@@ -219,7 +211,6 @@ export async function getWalletProfile(address: string): Promise<WalletProfile> 
 }
 
 export async function getWalletTransactions(address: string, limit = 50) {
-  noStore();
   if (hasDatabase()) {
     try {
       const normalized = normalizeAddress(address)!;
@@ -230,14 +221,14 @@ export async function getWalletTransactions(address: string, limit = 50) {
       });
       if (transactions.length) return transactions;
     } catch (error) {
-      console.warn("Database wallet transactions unavailable, falling back to live RPC.", error);
+      console.warn("Database wallet transactions unavailable.", error);
     }
+    return [];
   }
   return scanRecentWalletTransactions(address, limit);
 }
 
 export async function getTokenHoldings(address: string) {
-  noStore();
   if (hasDatabase()) {
     try {
       const normalized = normalizeAddress(address)!;
@@ -259,14 +250,14 @@ export async function getTokenHoldings(address: string) {
       }));
       if (holdings.length) return holdings;
     } catch (error) {
-      console.warn("Database token holdings unavailable, falling back to live RPC.", error);
+      console.warn("Database token holdings unavailable.", error);
     }
+    return [];
   }
   return scanTokenHoldings(address);
 }
 
 export async function getNftHoldings(address: string) {
-  noStore();
   if (hasDatabase()) {
     try {
       const normalized = normalizeAddress(address)!;
@@ -283,14 +274,14 @@ export async function getNftHoldings(address: string) {
       const holdings = [...owned.values()];
       if (holdings.length) return holdings;
     } catch (error) {
-      console.warn("Database NFT holdings unavailable, falling back to live RPC.", error);
+      console.warn("Database NFT holdings unavailable.", error);
     }
+    return [];
   }
   return scanNftHoldings(address);
 }
 
 export async function getTransaction(hash: string) {
-  noStore();
   if (hasDatabase()) {
     try {
       const tx = await prisma.transaction.findUnique({ where: { hash: hash.toLowerCase() }, include: { logs: true } });
@@ -329,7 +320,6 @@ export async function getTransaction(hash: string) {
 }
 
 export async function getBlock(number: string | number | bigint) {
-  noStore();
   const blockNumber = BigInt(number);
   if (hasDatabase()) {
     try {

@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getTransaction } from "@/lib/data";
 import { explorerUrl, formatAge, formatRitual } from "@/lib/utils";
 
+export const revalidate = 300;
+
 export default async function TxPage({ params }: { params: Promise<{ hash: string }> }) {
   const { hash } = await params;
   if (!/^0x[a-fA-F0-9]{64}$/.test(hash)) notFound();
