@@ -3,18 +3,67 @@ import { getAddress, isAddress } from "viem";
 import { prisma, hasDatabase } from "@/lib/db/prisma";
 import { publicClient } from "@/lib/ritual/client";
 import { scanNftHoldings, scanRecentWalletTransactions, scanTokenHoldings } from "@/lib/ritual/liveRpc";
-import type { DailyPoint, ExplorerBlock, ExplorerTransaction, WalletProfile } from "@/lib/types";
+import type { DailyPoint, ExplorerBlock, ExplorerTransaction, IndexingCoverage, WalletProfile } from "@/lib/types";
 import { normalizeAddress } from "@/lib/utils";
 
 export async function getDashboard() {
   noStore();
-  const [stats, latestTransactions, latestBlocks, daily] = await Promise.all([
+  const [stats, latestTransactions, latestBlocks, daily, coverage] = await Promise.all([
     getNetworkStats(),
     getLatestTransactions(8),
     getLatestBlocks(8),
-    getDailyStats()
+    getDailyStats(),
+    getIndexingCoverage()
   ]);
-  return { stats, latestTransactions, latestBlocks, daily };
+  return { stats, latestTransactions, latestBlocks, daily, coverage };
+}
+
+export async function getIndexingCoverage(): Promise<IndexingCoverage> {
+  noStore();
+  const latestBlock = await publicClient.getBlockNumber();
+
+  if (hasDatabase()) {
+    try {
+      const coverageStartBlock = getCoverageStartBlock();
+      const [state, firstBlock, indexedBlocks] = await Promise.all([
+        prisma.indexedState.findUnique({ where: { id: "ritual-testnet" } }),
+        prisma.block.findFirst({ where: { number: { gte: coverageStartBlock } }, orderBy: { number: "asc" }, select: { number: true } }),
+        prisma.block.count({ where: { number: { gte: coverageStartBlock } } })
+      ]);
+      const lastIndexedBlock = state?.lastBlock ?? null;
+      const remainingBlocks = lastIndexedBlock && latestBlock > lastIndexedBlock ? latestBlock - lastIndexedBlock : 0n;
+      const isCaughtUp = remainingBlocks <= 10n;
+      const displayStartBlock = firstBlock?.number ?? coverageStartBlock;
+
+      return {
+        mode: "indexed",
+        startBlock: displayStartBlock,
+        lastIndexedBlock,
+        latestBlock,
+        indexedBlocks,
+        isCaughtUp,
+        remainingBlocks,
+        label: isCaughtUp ? "Indexed data is near live" : "Indexed data is still catching up",
+        detail: lastIndexedBlock && lastIndexedBlock >= displayStartBlock
+          ? `Stats, wallet history, tokens, and NFTs reflect indexed blocks ${displayStartBlock.toString()}-${lastIndexedBlock.toString()}, not full chain history yet.`
+          : "The database is connected, but indexed coverage is not populated yet."
+      };
+    } catch (error) {
+      console.warn("Indexing coverage unavailable, falling back to live RPC mode.", error);
+    }
+  }
+
+  return {
+    mode: "live-rpc",
+    startBlock: null,
+    lastIndexedBlock: null,
+    latestBlock,
+    indexedBlocks: 0,
+    isCaughtUp: false,
+    remainingBlocks: 0n,
+    label: "Live RPC preview",
+    detail: "Postgres indexing is not available. The explorer is showing live network data and bounded recent scans only."
+  };
 }
 
 export async function getNetworkStats() {
@@ -24,12 +73,13 @@ export async function getNetworkStats() {
   if (hasDatabase()) {
     try {
       const today = startOfUtcDay(new Date());
+      const coverageStartBlock = getCoverageStartBlock();
       const [totalTransactions, dailyTransactions, activeWallets, activeToday, recentBlocks] = await Promise.all([
-        prisma.transaction.count(),
-        prisma.transaction.count({ where: { timestamp: { gte: today } } }),
-        prisma.addressActivity.groupBy({ by: ["address"] }).then((rows) => rows.length),
-        prisma.addressActivity.groupBy({ by: ["address"], where: { timestamp: { gte: today } } }).then((rows) => rows.length),
-        prisma.block.findMany({ orderBy: { number: "desc" }, take: 20 })
+        prisma.transaction.count({ where: { blockNumber: { gte: coverageStartBlock } } }),
+        prisma.transaction.count({ where: { blockNumber: { gte: coverageStartBlock }, timestamp: { gte: today } } }),
+        prisma.addressActivity.groupBy({ by: ["address"], where: { blockNumber: { gte: coverageStartBlock } } }).then((rows) => rows.length),
+        prisma.addressActivity.groupBy({ by: ["address"], where: { blockNumber: { gte: coverageStartBlock }, timestamp: { gte: today } } }).then((rows) => rows.length),
+        prisma.block.findMany({ where: { number: { gte: coverageStartBlock } }, orderBy: { number: "desc" }, take: 20 })
       ]);
 
       const avg = averageBlockTime(recentBlocks.map((b) => b.timestamp));
@@ -63,7 +113,7 @@ export async function getLatestBlocks(limit = 20, page = 1): Promise<ExplorerBlo
   noStore();
   if (hasDatabase()) {
     try {
-      return await prisma.block.findMany({ orderBy: { number: "desc" }, take: limit, skip: (page - 1) * limit });
+      return await prisma.block.findMany({ where: { number: { gte: getCoverageStartBlock() } }, orderBy: { number: "desc" }, take: limit, skip: (page - 1) * limit });
     } catch (error) {
       console.warn("Database blocks unavailable, falling back to live RPC.", error);
     }
@@ -93,6 +143,7 @@ export async function getLatestTransactions(limit = 20, page = 1): Promise<Explo
   if (hasDatabase()) {
     try {
       return await prisma.transaction.findMany({
+        where: { blockNumber: { gte: getCoverageStartBlock() } },
         orderBy: [{ blockNumber: "desc" }, { transactionIndex: "desc" }],
         take: limit,
         skip: (page - 1) * limit
@@ -124,7 +175,9 @@ export async function getDailyStats(): Promise<DailyPoint[]> {
   noStore();
   if (hasDatabase()) {
     try {
-      const stats = await prisma.dailyStat.findMany({ orderBy: { day: "asc" }, take: 30 });
+      const coverageStartBlock = getCoverageStartBlock();
+      const firstCoveredBlock = await prisma.block.findFirst({ where: { number: { gte: coverageStartBlock } }, orderBy: { number: "asc" }, select: { timestamp: true } });
+      const stats = await prisma.dailyStat.findMany({ where: firstCoveredBlock ? { day: { gte: startOfUtcDay(firstCoveredBlock.timestamp) } } : undefined, orderBy: { day: "asc" }, take: 30 });
       if (stats.length) {
         return stats.map((stat) => ({
           day: stat.day.toISOString().slice(5, 10),
@@ -148,7 +201,7 @@ export async function getWalletProfile(address: string): Promise<WalletProfile> 
   let activity: Awaited<ReturnType<typeof prisma.addressActivity.findMany>> = [];
   if (hasDatabase()) {
     try {
-      activity = await prisma.addressActivity.findMany({ where: { address: normalized }, orderBy: { timestamp: "asc" } });
+      activity = await prisma.addressActivity.findMany({ where: { address: normalized, blockNumber: { gte: getCoverageStartBlock() } }, orderBy: { timestamp: "asc" } });
     } catch (error) {
       console.warn("Database wallet activity unavailable.", error);
     }
@@ -171,7 +224,7 @@ export async function getWalletTransactions(address: string, limit = 50) {
     try {
       const normalized = normalizeAddress(address)!;
       const transactions = await prisma.transaction.findMany({
-        where: { OR: [{ from: normalized }, { to: normalized }] },
+        where: { blockNumber: { gte: getCoverageStartBlock() }, OR: [{ from: normalized }, { to: normalized }] },
         orderBy: [{ blockNumber: "desc" }, { transactionIndex: "desc" }],
         take: limit
       });
@@ -189,7 +242,7 @@ export async function getTokenHoldings(address: string) {
     try {
       const normalized = normalizeAddress(address)!;
       const transfers = await prisma.tokenTransfer.findMany({
-        where: { OR: [{ from: normalized }, { to: normalized }] }
+        where: { blockNumber: { gte: getCoverageStartBlock() }, OR: [{ from: normalized }, { to: normalized }] }
       });
       const balances = new Map<string, bigint>();
       for (const t of transfers) {
@@ -218,7 +271,7 @@ export async function getNftHoldings(address: string) {
     try {
       const normalized = normalizeAddress(address)!;
       const transfers = await prisma.nftTransfer.findMany({
-        where: { OR: [{ from: normalized }, { to: normalized }] },
+        where: { blockNumber: { gte: getCoverageStartBlock() }, OR: [{ from: normalized }, { to: normalized }] },
         orderBy: { timestamp: "asc" }
       });
       const owned = new Map<string, { contract: string; tokenId: string; standard: string }>();
@@ -316,6 +369,11 @@ export async function getBlock(number: string | number | bigint) {
 
 function startOfUtcDay(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function getCoverageStartBlock() {
+  const configured = BigInt(process.env.INDEXER_COVERAGE_START_BLOCK || process.env.INDEXER_START_BLOCK || "1000000");
+  return configured > 0n ? configured : 1_000_000n;
 }
 
 function averageBlockTime(dates: Date[]) {

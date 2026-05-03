@@ -46,3 +46,15 @@ export type WalletProfile = {
   sentCount: number;
   receivedCount: number;
 };
+
+export type IndexingCoverage = {
+  mode: "indexed" | "live-rpc";
+  startBlock?: bigint | null;
+  lastIndexedBlock?: bigint | null;
+  latestBlock: bigint;
+  indexedBlocks: number;
+  isCaughtUp: boolean;
+  remainingBlocks: bigint;
+  label: string;
+  detail: string;
+};

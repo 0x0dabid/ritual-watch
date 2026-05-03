@@ -31,6 +31,7 @@ NEXT_PUBLIC_RITUAL_EXPLORER_URL=https://explorer.ritualfoundation.org
 NEXT_PUBLIC_RITUAL_NAMES_CONTRACT=0xb9976C592f4E90B51bDa05B0B3d8b7735D24743A
 DATABASE_URL=
 INDEXER_START_BLOCK=
+INDEXER_COVERAGE_START_BLOCK=
 RITUAL_SCANNER_RPC_URL=https://scanner-rpc.ritualfoundation.org/
 RITUAL_LIVE_TX_SCAN_BLOCKS=500
 RITUAL_LIVE_LOG_SCAN_BLOCKS=5000
@@ -125,6 +126,7 @@ Configure these in GitHub before relying on scheduled indexing:
 - Repository secret `DATABASE_URL`: Supabase Postgres Session Pooler URL.
 - Repository variable `RITUAL_RPC_URL`: `https://rpc.ritualfoundation.org`.
 - Repository variable `INDEXER_START_BLOCK`: the earliest block to backfill from.
+- Repository variable `INDEXER_COVERAGE_START_BLOCK`: the first block the UI should treat as the accurate indexed window. Usually the same as `INDEXER_START_BLOCK`.
 - Optional repository variable `INDEXER_MAX_BLOCKS`: blocks per scheduled run, default `50`.
 
 You can also run it manually from GitHub Actions and override `max_blocks` for a larger catch-up run. Vercel hosts the explorer UI; GitHub Actions keeps Supabase filled with indexed chain data.
