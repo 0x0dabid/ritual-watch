@@ -9,6 +9,7 @@ requireEnv("DATABASE_URL");
 
 const client = createPublicClient({ chain: ritualChain, transport: http(ritualConfig.rpcUrl) });
 const BATCH_SIZE = BigInt(process.env.INDEXER_BATCH_SIZE || "25");
+const CONCURRENCY = Math.max(1, parseInt(process.env.INDEXER_CONCURRENCY || "1"));
 const DEFAULT_START_BLOCK = 1_000_000n;
 const INDEX_LOGS = process.env.INDEXER_STORE_RAW_LOGS === "true";
 const INDEX_TOKEN_METADATA = process.env.INDEXER_TOKEN_METADATA === "true";
@@ -28,6 +29,10 @@ async function main() {
 
   if (configuredStartBlock === 0n) {
     console.log(`INDEXER_START_BLOCK=0 detected; starting at ${DEFAULT_START_BLOCK.toString()} to avoid malformed genesis-era timestamps.`);
+  }
+
+  if (CONCURRENCY > 1) {
+    console.log(`Fast-track mode: processing ${CONCURRENCY} blocks in parallel.`);
   }
 
   await prisma.indexedState.upsert({
@@ -61,66 +66,107 @@ async function main() {
     const batchSize = remaining < BATCH_SIZE ? remaining : BATCH_SIZE;
     const end = latest - next + 1n > batchSize ? next + batchSize - 1n : latest;
 
-    for (let n = next; n <= end; n++) {
-      await indexFocusedBlock(n);
-      await prisma.indexedState.update({ where: { id: "ritual-testnet" }, data: { lastBlock: n } });
-      indexedBlocks++;
-      console.log(`indexed focused block ${n.toString()}`);
-    }
+    await indexBlockRange(next, end);
+    await prisma.indexedState.update({ where: { id: "ritual-testnet" }, data: { lastBlock: end } });
+    const count = Number(end - next + 1n);
+    indexedBlocks += BigInt(count);
+    console.log(`indexed blocks ${next.toString()}-${end.toString()} (${count} block${count !== 1 ? "s" : ""})`);
   }
 }
 
-async function indexFocusedBlock(blockNumber: bigint) {
+async function processBlock(blockNumber: bigint) {
   const block = await client.getBlock({ blockNumber, includeTransactions: true });
   const timestamp = blockTimestamp(block);
   if (!timestamp) {
     console.warn(`Skipping block ${blockNumber.toString()} with unsupported timestamp ${block.timestamp.toString()}`);
-    return;
+    return null;
   }
 
   const txs = block.transactions as Transaction[];
   const receipts = await Promise.all(txs.map((tx) => client.getTransactionReceipt({ hash: tx.hash }).catch(() => null)));
-  const blockDataValue = blockData(block, timestamp);
+
   const txRows = txs.map((tx, i) => txData(tx, block, receipts[i], timestamp));
   const activityRows = buildAddressActivityRows(txs, block.number!, timestamp);
-  const transferRows = buildTransferRows(txs, receipts.map((receipt) => receipt?.logs ?? []), timestamp, block.number!);
-  const rawLogRows = INDEX_LOGS ? buildRawLogRows(txs, receipts.map((receipt) => receipt?.logs ?? []), block.number!) : [];
+  const transfers = buildTransferRows(txs, receipts.map((r) => r?.logs ?? []), timestamp, block.number!);
+  const logRows = INDEX_LOGS ? buildRawLogRows(txs, receipts.map((r) => r?.logs ?? []), block.number!) : [];
 
-  await prisma.$transaction(async (db) => {
-    await db.block.upsert({
-      where: { number: block.number! },
-      update: blockDataValue,
-      create: blockDataValue
-    });
+  const day = new Date(Date.UTC(timestamp.getUTCFullYear(), timestamp.getUTCMonth(), timestamp.getUTCDate()));
 
-    for (const row of txRows) {
-      await db.transaction.upsert({
-        where: { hash: row.hash },
-        update: row,
-        create: row
-      });
-    }
+  return {
+    blockRow: blockData(block, timestamp),
+    txRows,
+    activityRows,
+    tokenTransfers: transfers.token,
+    nftTransfers: transfers.nft,
+    logRows,
+    dayMs: day.getTime(),
+    tokenAddresses: [...new Set(transfers.token.map((r) => r.token))] as `0x${string}`[]
+  };
+}
 
-    if (activityRows.length) {
-      await db.addressActivity.createMany({ data: activityRows, skipDuplicates: true });
-    }
-    if (transferRows.token.length) {
-      await db.tokenTransfer.createMany({ data: transferRows.token, skipDuplicates: true });
-    }
-    if (transferRows.nft.length) {
-      await db.nftTransfer.createMany({ data: transferRows.nft, skipDuplicates: true });
-    }
-    if (rawLogRows.length) {
-      await db.log.createMany({ data: rawLogRows, skipDuplicates: true });
-    }
-  }, { maxWait: 20_000, timeout: 60_000 });
+async function indexBlockRange(start: bigint, end: bigint) {
+  const blockNumbers: bigint[] = [];
+  for (let n = start; n <= end; n++) blockNumbers.push(n);
 
-  if (INDEX_TOKEN_METADATA) {
-    const tokenAddresses = [...new Set(transferRows.token.map((row) => row.token))];
-    await Promise.all(tokenAddresses.map((address) => upsertTokenMetadata(address as `0x${string}`)));
+  const allBlockRows: ReturnType<typeof blockData>[] = [];
+  const allTxRows: ReturnType<typeof txData>[] = [];
+  const allActivityRows: ReturnType<typeof buildAddressActivityRows> = [];
+  const allTokenTransfers: ReturnType<typeof buildTransferRows>["token"] = [];
+  const allNftTransfers: ReturnType<typeof buildTransferRows>["nft"] = [];
+  const allLogRows: ReturnType<typeof buildRawLogRows> = [];
+  const daysToRecompute = new Set<number>();
+  const tokenAddresses: `0x${string}`[] = [];
+
+  // Process blocks in parallel groups of CONCURRENCY
+  for (let i = 0; i < blockNumbers.length; i += CONCURRENCY) {
+    const group = blockNumbers.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(group.map(processBlock));
+
+    for (const result of results) {
+      if (!result) continue;
+      allBlockRows.push(result.blockRow);
+      allTxRows.push(...result.txRows);
+      allActivityRows.push(...result.activityRows);
+      allTokenTransfers.push(...result.tokenTransfers);
+      allNftTransfers.push(...result.nftTransfers);
+      allLogRows.push(...result.logRows);
+      daysToRecompute.add(result.dayMs);
+      tokenAddresses.push(...result.tokenAddresses);
+    }
   }
 
-  await recomputeDaily(timestamp);
+  if (allBlockRows.length === 0) return;
+
+  await prisma.$transaction(async (db) => {
+    for (const row of allBlockRows) {
+      await db.block.upsert({ where: { number: row.number }, update: row, create: row });
+    }
+    for (const row of allTxRows) {
+      await db.transaction.upsert({ where: { hash: row.hash }, update: row, create: row });
+    }
+    if (allActivityRows.length) {
+      await db.addressActivity.createMany({ data: allActivityRows, skipDuplicates: true });
+    }
+    if (allTokenTransfers.length) {
+      await db.tokenTransfer.createMany({ data: allTokenTransfers, skipDuplicates: true });
+    }
+    if (allNftTransfers.length) {
+      await db.nftTransfer.createMany({ data: allNftTransfers, skipDuplicates: true });
+    }
+    if (allLogRows.length) {
+      await db.log.createMany({ data: allLogRows, skipDuplicates: true });
+    }
+  }, { maxWait: 30_000, timeout: 120_000 });
+
+  if (INDEX_TOKEN_METADATA && tokenAddresses.length) {
+    const unique = [...new Set(tokenAddresses)];
+    await Promise.all(unique.map((address) => upsertTokenMetadata(address)));
+  }
+
+  // Recompute daily stats once per unique day touched by this batch
+  for (const dayMs of daysToRecompute) {
+    await recomputeDaily(new Date(dayMs));
+  }
 }
 
 function buildAddressActivityRows(txs: Transaction[], blockNumber: bigint, timestamp: Date) {

@@ -9,6 +9,14 @@ on:
         description: "Maximum blocks to index in this run"
         required: false
         default: "50"
+      concurrency:
+        description: "Blocks to fetch in parallel (fast-track: 5-20, normal: 1)"
+        required: false
+        default: "1"
+      batch_size:
+        description: "Batch size (blocks per loop iteration)"
+        required: false
+        default: "50"
 
 concurrency:
   group: ritual-watch-indexer
@@ -29,7 +37,8 @@ jobs:
       INDEXER_COVERAGE_START_BLOCK: ${{ vars.INDEXER_COVERAGE_START_BLOCK || vars.INDEXER_START_BLOCK || '1000000' }}
       INDEXER_ONCE: "true"
       INDEXER_MAX_BLOCKS: ${{ inputs.max_blocks || vars.INDEXER_MAX_BLOCKS || '250' }}
-      INDEXER_BATCH_SIZE: ${{ vars.INDEXER_BATCH_SIZE || '50' }}
+      INDEXER_BATCH_SIZE: ${{ inputs.batch_size || vars.INDEXER_BATCH_SIZE || '50' }}
+      INDEXER_CONCURRENCY: ${{ inputs.concurrency || '1' }}
       INDEXER_STORE_RAW_LOGS: "false"
       INDEXER_TOKEN_METADATA: "false"
 
