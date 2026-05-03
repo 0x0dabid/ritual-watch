@@ -1,0 +1,157 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model IndexedState {
+  id             String   @id @default("ritual-testnet")
+  lastBlock      BigInt   @default(0)
+  updatedAt      DateTime @updatedAt
+}
+
+model Block {
+  number      BigInt        @id
+  hash        String        @unique
+  parentHash  String
+  timestamp   DateTime
+  txCount     Int
+  gasUsed     String
+  gasLimit    String
+  baseFee     String?
+  miner       String?
+  size        Int?
+  transactions Transaction[]
+
+  @@index([timestamp])
+}
+
+model Transaction {
+  hash             String   @id
+  blockNumber      BigInt
+  blockHash        String
+  transactionIndex Int
+  from             String
+  to               String?
+  value            String
+  gas              String
+  gasPrice         String?
+  maxFeePerGas     String?
+  nonce            Int
+  input            String
+  status           String?
+  gasUsed          String?
+  effectiveGasPrice String?
+  timestamp        DateTime
+  method           String?
+  block            Block    @relation(fields: [blockNumber], references: [number], onDelete: Cascade)
+  logs             Log[]
+
+  @@index([from])
+  @@index([to])
+  @@index([blockNumber])
+  @@index([timestamp])
+}
+
+model Log {
+  id          String @id
+  txHash      String
+  blockNumber BigInt
+  address     String
+  topic0      String?
+  topic1      String?
+  topic2      String?
+  topic3      String?
+  data        String
+  logIndex    Int
+  transaction Transaction @relation(fields: [txHash], references: [hash], onDelete: Cascade)
+
+  @@index([address])
+  @@index([topic0])
+}
+
+model AddressActivity {
+  id          String   @id
+  address     String
+  txHash      String
+  blockNumber BigInt
+  timestamp   DateTime
+  direction   String
+
+  @@unique([address, txHash, direction])
+  @@index([address])
+  @@index([timestamp])
+}
+
+model TokenTransfer {
+  id          String   @id
+  txHash      String
+  blockNumber BigInt
+  timestamp   DateTime
+  token       String
+  from        String
+  to          String
+  value       String
+
+  @@index([token])
+  @@index([from])
+  @@index([to])
+}
+
+model NftTransfer {
+  id          String   @id
+  txHash      String
+  blockNumber BigInt
+  timestamp   DateTime
+  contract    String
+  from        String
+  to          String
+  tokenId     String
+  standard    String
+
+  @@index([contract])
+  @@index([from])
+  @@index([to])
+}
+
+model TokenContract {
+  address  String @id
+  symbol   String?
+  name     String?
+  decimals Int?
+}
+
+model NftContract {
+  address String @id
+  name    String?
+  symbol  String?
+}
+
+model DailyStat {
+  day           DateTime @id
+  txCount       Int
+  activeWallets Int
+}
+
+model RitualName {
+  name      String  @id
+  tokenId   String?
+  owner     String
+  resolver  String?
+  primaryFor String?
+  updatedAt DateTime @updatedAt
+
+  @@index([owner])
+}
+
+model RitualNameTextRecord {
+  id    String @id
+  name  String
+  key   String
+  value String
+
+  @@unique([name, key])
+}
