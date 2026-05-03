@@ -118,6 +118,8 @@ It indexes:
 
 This repo includes `.github/workflows/indexer.yml`, a scheduled indexer that runs every 5 minutes and indexes a bounded chunk of blocks into Postgres.
 
+Run `npm run db:migrate` locally before relying on the scheduled indexer. The workflow does not run migrations on every schedule because that wastes Supabase pool sessions and can hit free-tier connection limits.
+
 Configure these in GitHub before relying on scheduled indexing:
 
 - Repository secret `DATABASE_URL`: Supabase Postgres Session Pooler URL.

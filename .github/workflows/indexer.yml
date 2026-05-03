@@ -45,8 +45,5 @@ jobs:
       - name: Generate Prisma client
         run: npm run db:generate
 
-      - name: Apply database migrations
-        run: npm run db:deploy
-
       - name: Index Ritual blocks
         run: npm run indexer
