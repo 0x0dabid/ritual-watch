@@ -84,8 +84,12 @@ export async function resolveRitualName(name: string): Promise<Address | null> {
   if (!normalizedName.endsWith(".ritual")) return null;
 
   if (hasDatabase()) {
-    const found = await prisma.ritualName.findUnique({ where: { name: normalizedName } });
-    if (found?.owner && isAddress(found.owner)) return found.owner as Address;
+    try {
+      const found = await prisma.ritualName.findUnique({ where: { name: normalizedName } });
+      if (found?.owner && isAddress(found.owner)) return found.owner as Address;
+    } catch (error) {
+      console.warn("Database .ritual lookup unavailable, falling back to contract read.", error);
+    }
   }
 
   if (!ritualConfig.namesContract) return null;
@@ -131,8 +135,12 @@ export async function getNamesForAddress(address: string) {
   const normalized = normalizeAddress(address);
   if (!normalized) return [];
   if (hasDatabase()) {
-    const names = await prisma.ritualName.findMany({ where: { owner: normalized }, orderBy: { name: "asc" } });
-    if (names.length) return names;
+    try {
+      const names = await prisma.ritualName.findMany({ where: { owner: normalized }, orderBy: { name: "asc" } });
+      if (names.length) return names;
+    } catch (error) {
+      console.warn("Database owned .ritual names unavailable, falling back to contract read.", error);
+    }
   }
   if (!ritualConfig.namesContract || !isAddress(address)) return [];
 
@@ -169,8 +177,12 @@ export async function getPrimaryName(address: string) {
   const normalized = normalizeAddress(address);
   if (!normalized) return null;
   if (hasDatabase()) {
-    const primary = await prisma.ritualName.findFirst({ where: { primaryFor: normalized } });
-    if (primary?.name) return primary.name.replace(/\.ritual$/, "");
+    try {
+      const primary = await prisma.ritualName.findFirst({ where: { primaryFor: normalized } });
+      if (primary?.name) return primary.name.replace(/\.ritual$/, "");
+    } catch (error) {
+      console.warn("Database primary .ritual name unavailable, falling back to contract read.", error);
+    }
   }
   if (!ritualConfig.namesContract || !isAddress(address)) return null;
   try {
@@ -188,5 +200,10 @@ export async function getPrimaryName(address: string) {
 
 export async function getTextRecords(name: string) {
   if (!hasDatabase()) return [];
-  return prisma.ritualNameTextRecord.findMany({ where: { name: name.toLowerCase() }, orderBy: { key: "asc" } });
+  try {
+    return await prisma.ritualNameTextRecord.findMany({ where: { name: name.toLowerCase() }, orderBy: { key: "asc" } });
+  } catch (error) {
+    console.warn("Database .ritual text records unavailable.", error);
+    return [];
+  }
 }

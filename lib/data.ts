@@ -6,8 +6,6 @@ import { scanNftHoldings, scanRecentWalletTransactions, scanTokenHoldings } from
 import type { DailyPoint, ExplorerBlock, ExplorerTransaction, WalletProfile } from "@/lib/types";
 import { normalizeAddress } from "@/lib/utils";
 
-const ZERO = "0x0000000000000000000000000000000000000000";
-
 export async function getDashboard() {
   noStore();
   const [stats, latestTransactions, latestBlocks, daily] = await Promise.all([
@@ -23,44 +21,52 @@ export async function getNetworkStats() {
   noStore();
   const latestBlockNumber = await publicClient.getBlockNumber();
 
-  if (!hasDatabase()) {
-    const latestBlock = await publicClient.getBlock({ blockNumber: latestBlockNumber });
-    return {
-      totalTransactions: 0,
-      dailyTransactions: 0,
-      totalActiveWallets: 0,
-      activeWalletsToday: 0,
-      latestBlock: Number(latestBlockNumber),
-      averageBlockTime: "—",
-      latestBlockTimestamp: new Date(Number(latestBlock.timestamp) * 1000)
-    };
+  if (hasDatabase()) {
+    try {
+      const today = startOfUtcDay(new Date());
+      const [totalTransactions, dailyTransactions, activeWallets, activeToday, recentBlocks] = await Promise.all([
+        prisma.transaction.count(),
+        prisma.transaction.count({ where: { timestamp: { gte: today } } }),
+        prisma.addressActivity.groupBy({ by: ["address"] }).then((rows) => rows.length),
+        prisma.addressActivity.groupBy({ by: ["address"], where: { timestamp: { gte: today } } }).then((rows) => rows.length),
+        prisma.block.findMany({ orderBy: { number: "desc" }, take: 20 })
+      ]);
+
+      const avg = averageBlockTime(recentBlocks.map((b) => b.timestamp));
+      return {
+        totalTransactions,
+        dailyTransactions,
+        totalActiveWallets: activeWallets,
+        activeWalletsToday: activeToday,
+        latestBlock: Number(latestBlockNumber),
+        averageBlockTime: avg ? `${avg.toFixed(1)}s` : "-",
+        latestBlockTimestamp: recentBlocks[0]?.timestamp
+      };
+    } catch (error) {
+      console.warn("Database analytics unavailable, falling back to live RPC.", error);
+    }
   }
 
-  const today = startOfUtcDay(new Date());
-  const [totalTransactions, dailyTransactions, activeWallets, activeToday, recentBlocks] = await Promise.all([
-    prisma.transaction.count(),
-    prisma.transaction.count({ where: { timestamp: { gte: today } } }),
-    prisma.addressActivity.groupBy({ by: ["address"] }).then((rows) => rows.length),
-    prisma.addressActivity.groupBy({ by: ["address"], where: { timestamp: { gte: today } } }).then((rows) => rows.length),
-    prisma.block.findMany({ orderBy: { number: "desc" }, take: 20 })
-  ]);
-
-  const avg = averageBlockTime(recentBlocks.map((b) => b.timestamp));
+  const latestBlock = await publicClient.getBlock({ blockNumber: latestBlockNumber });
   return {
-    totalTransactions,
-    dailyTransactions,
-    totalActiveWallets: activeWallets,
-    activeWalletsToday: activeToday,
+    totalTransactions: 0,
+    dailyTransactions: 0,
+    totalActiveWallets: 0,
+    activeWalletsToday: 0,
     latestBlock: Number(latestBlockNumber),
-    averageBlockTime: avg ? `${avg.toFixed(1)}s` : "—",
-    latestBlockTimestamp: recentBlocks[0]?.timestamp
+    averageBlockTime: "-",
+    latestBlockTimestamp: new Date(Number(latestBlock.timestamp) * 1000)
   };
 }
 
 export async function getLatestBlocks(limit = 20, page = 1): Promise<ExplorerBlock[]> {
   noStore();
   if (hasDatabase()) {
-    return prisma.block.findMany({ orderBy: { number: "desc" }, take: limit, skip: (page - 1) * limit });
+    try {
+      return await prisma.block.findMany({ orderBy: { number: "desc" }, take: limit, skip: (page - 1) * limit });
+    } catch (error) {
+      console.warn("Database blocks unavailable, falling back to live RPC.", error);
+    }
   }
 
   const latest = await publicClient.getBlockNumber();
@@ -85,12 +91,17 @@ export async function getLatestBlocks(limit = 20, page = 1): Promise<ExplorerBlo
 export async function getLatestTransactions(limit = 20, page = 1): Promise<ExplorerTransaction[]> {
   noStore();
   if (hasDatabase()) {
-    return prisma.transaction.findMany({ orderBy: [{ blockNumber: "desc" }, { transactionIndex: "desc" }], take: limit, skip: (page - 1) * limit });
+    try {
+      return await prisma.transaction.findMany({
+        orderBy: [{ blockNumber: "desc" }, { transactionIndex: "desc" }],
+        take: limit,
+        skip: (page - 1) * limit
+      });
+    } catch (error) {
+      console.warn("Database transactions unavailable, falling back to live RPC.", error);
+    }
   }
 
-  const blocks = await getLatestBlocks(8);
-  const hashes = blocks.flatMap((block) => block.txCount ? [] : []);
-  void hashes;
   const latest = await publicClient.getBlock({ blockTag: "latest", includeTransactions: true });
   return latest.transactions.slice(0, limit).map((tx) => ({
     hash: tx.hash,
@@ -111,45 +122,44 @@ export async function getLatestTransactions(limit = 20, page = 1): Promise<Explo
 
 export async function getDailyStats(): Promise<DailyPoint[]> {
   noStore();
-  if (!hasDatabase()) return seedDaily();
-  const stats = await prisma.dailyStat.findMany({ orderBy: { day: "asc" }, take: 30 });
-  if (!stats.length) return seedDaily();
-  return stats.map((stat) => ({
-    day: stat.day.toISOString().slice(5, 10),
-    txCount: stat.txCount,
-    activeWallets: stat.activeWallets
-  }));
+  if (hasDatabase()) {
+    try {
+      const stats = await prisma.dailyStat.findMany({ orderBy: { day: "asc" }, take: 30 });
+      if (stats.length) {
+        return stats.map((stat) => ({
+          day: stat.day.toISOString().slice(5, 10),
+          txCount: stat.txCount,
+          activeWallets: stat.activeWallets
+        }));
+      }
+    } catch (error) {
+      console.warn("Database daily stats unavailable, falling back to seed data.", error);
+    }
+  }
+  return seedDaily();
 }
 
 export async function getWalletProfile(address: string): Promise<WalletProfile> {
   noStore();
   const checksummed = isAddress(address) ? getAddress(address) : address;
   const normalized = normalizeAddress(checksummed)!;
-  const [balance, activity] = await Promise.all([
-    isAddress(checksummed) ? publicClient.getBalance({ address: checksummed as `0x${string}` }) : 0n,
-    hasDatabase()
-      ? prisma.addressActivity.findMany({ where: { address: normalized }, orderBy: { timestamp: "asc" } })
-      : Promise.resolve([])
-  ]);
+  const balance = isAddress(checksummed) ? await publicClient.getBalance({ address: checksummed as `0x${string}` }) : 0n;
 
-  if (!hasDatabase()) {
-    return {
-      address: checksummed,
-      balance,
-      totalTransactions: 0,
-      firstSeen: null,
-      lastActive: null,
-      sentCount: 0,
-      receivedCount: 0
-    };
+  let activity: Awaited<ReturnType<typeof prisma.addressActivity.findMany>> = [];
+  if (hasDatabase()) {
+    try {
+      activity = await prisma.addressActivity.findMany({ where: { address: normalized }, orderBy: { timestamp: "asc" } });
+    } catch (error) {
+      console.warn("Database wallet activity unavailable.", error);
+    }
   }
 
   return {
     address: checksummed,
     balance,
     totalTransactions: activity.length,
-    firstSeen: activity[0]?.timestamp,
-    lastActive: activity.at(-1)?.timestamp,
+    firstSeen: activity[0]?.timestamp ?? null,
+    lastActive: activity.at(-1)?.timestamp ?? null,
     sentCount: activity.filter((a) => a.direction === "sent").length,
     receivedCount: activity.filter((a) => a.direction === "received").length
   };
@@ -157,62 +167,84 @@ export async function getWalletProfile(address: string): Promise<WalletProfile> 
 
 export async function getWalletTransactions(address: string, limit = 50) {
   noStore();
-  if (!hasDatabase()) return scanRecentWalletTransactions(address, limit);
-  const normalized = normalizeAddress(address)!;
-  const transactions = await prisma.transaction.findMany({
-    where: { OR: [{ from: normalized }, { to: normalized }] },
-    orderBy: [{ blockNumber: "desc" }, { transactionIndex: "desc" }],
-    take: limit
-  });
-  return transactions.length ? transactions : scanRecentWalletTransactions(address, limit);
+  if (hasDatabase()) {
+    try {
+      const normalized = normalizeAddress(address)!;
+      const transactions = await prisma.transaction.findMany({
+        where: { OR: [{ from: normalized }, { to: normalized }] },
+        orderBy: [{ blockNumber: "desc" }, { transactionIndex: "desc" }],
+        take: limit
+      });
+      if (transactions.length) return transactions;
+    } catch (error) {
+      console.warn("Database wallet transactions unavailable, falling back to live RPC.", error);
+    }
+  }
+  return scanRecentWalletTransactions(address, limit);
 }
 
 export async function getTokenHoldings(address: string) {
   noStore();
-  if (!hasDatabase()) return scanTokenHoldings(address);
-  const normalized = normalizeAddress(address)!;
-  const transfers = await prisma.tokenTransfer.findMany({
-    where: { OR: [{ from: normalized }, { to: normalized }] }
-  });
-  const balances = new Map<string, bigint>();
-  for (const t of transfers) {
-    const value = BigInt(t.value);
-    balances.set(t.token, (balances.get(t.token) ?? 0n) + (t.to === normalized ? value : -value));
+  if (hasDatabase()) {
+    try {
+      const normalized = normalizeAddress(address)!;
+      const transfers = await prisma.tokenTransfer.findMany({
+        where: { OR: [{ from: normalized }, { to: normalized }] }
+      });
+      const balances = new Map<string, bigint>();
+      for (const t of transfers) {
+        const value = BigInt(t.value);
+        balances.set(t.token, (balances.get(t.token) ?? 0n) + (t.to === normalized ? value : -value));
+      }
+      const contracts = await prisma.tokenContract.findMany({ where: { address: { in: [...balances.keys()] } } });
+      const holdings = [...balances.entries()].filter(([, balance]) => balance > 0n).map(([token, balance]) => ({
+        contract: token,
+        balance,
+        formattedBalance: balance.toString(),
+        symbol: contracts.find((c) => c.address === token)?.symbol ?? "TOKEN",
+        name: contracts.find((c) => c.address === token)?.name ?? "Unknown token"
+      }));
+      if (holdings.length) return holdings;
+    } catch (error) {
+      console.warn("Database token holdings unavailable, falling back to live RPC.", error);
+    }
   }
-  const contracts = await prisma.tokenContract.findMany({ where: { address: { in: [...balances.keys()] } } });
-  const holdings = [...balances.entries()].filter(([, balance]) => balance > 0n).map(([token, balance]) => ({
-    contract: token,
-    balance,
-    formattedBalance: balance.toString(),
-    symbol: contracts.find((c) => c.address === token)?.symbol ?? "TOKEN",
-    name: contracts.find((c) => c.address === token)?.name ?? "Unknown token"
-  }));
-  return holdings.length ? holdings : scanTokenHoldings(address);
+  return scanTokenHoldings(address);
 }
 
 export async function getNftHoldings(address: string) {
   noStore();
-  if (!hasDatabase()) return scanNftHoldings(address);
-  const normalized = normalizeAddress(address)!;
-  const transfers = await prisma.nftTransfer.findMany({
-    where: { OR: [{ from: normalized }, { to: normalized }] },
-    orderBy: { timestamp: "asc" }
-  });
-  const owned = new Map<string, { contract: string; tokenId: string; standard: string }>();
-  for (const t of transfers) {
-    const key = `${t.contract}:${t.tokenId}`;
-    if (t.to === normalized) owned.set(key, { contract: t.contract, tokenId: t.tokenId, standard: t.standard });
-    if (t.from === normalized) owned.delete(key);
+  if (hasDatabase()) {
+    try {
+      const normalized = normalizeAddress(address)!;
+      const transfers = await prisma.nftTransfer.findMany({
+        where: { OR: [{ from: normalized }, { to: normalized }] },
+        orderBy: { timestamp: "asc" }
+      });
+      const owned = new Map<string, { contract: string; tokenId: string; standard: string }>();
+      for (const t of transfers) {
+        const key = `${t.contract}:${t.tokenId}`;
+        if (t.to === normalized) owned.set(key, { contract: t.contract, tokenId: t.tokenId, standard: t.standard });
+        if (t.from === normalized) owned.delete(key);
+      }
+      const holdings = [...owned.values()];
+      if (holdings.length) return holdings;
+    } catch (error) {
+      console.warn("Database NFT holdings unavailable, falling back to live RPC.", error);
+    }
   }
-  const holdings = [...owned.values()];
-  return holdings.length ? holdings : scanNftHoldings(address);
+  return scanNftHoldings(address);
 }
 
 export async function getTransaction(hash: string) {
   noStore();
   if (hasDatabase()) {
-    const tx = await prisma.transaction.findUnique({ where: { hash: hash.toLowerCase() }, include: { logs: true } });
-    if (tx) return tx;
+    try {
+      const tx = await prisma.transaction.findUnique({ where: { hash: hash.toLowerCase() }, include: { logs: true } });
+      if (tx) return tx;
+    } catch (error) {
+      console.warn("Database transaction lookup unavailable, falling back to live RPC.", error);
+    }
   }
 
   const [tx, receipt] = await Promise.all([
@@ -247,9 +279,17 @@ export async function getBlock(number: string | number | bigint) {
   noStore();
   const blockNumber = BigInt(number);
   if (hasDatabase()) {
-    const block = await prisma.block.findUnique({ where: { number: blockNumber }, include: { transactions: { orderBy: { transactionIndex: "asc" } } } });
-    if (block) return block;
+    try {
+      const block = await prisma.block.findUnique({
+        where: { number: blockNumber },
+        include: { transactions: { orderBy: { transactionIndex: "asc" } } }
+      });
+      if (block) return block;
+    } catch (error) {
+      console.warn("Database block lookup unavailable, falling back to live RPC.", error);
+    }
   }
+
   const block = await publicClient.getBlock({ blockNumber, includeTransactions: true });
   return {
     number: block.number!,
